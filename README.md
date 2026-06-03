@@ -10,22 +10,22 @@ Hướng dẫn xây dựng hệ thống logging cho Kubernetes cluster với **V
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   Kubernetes Cluster                     │
-│                                                          │
+│                   Kubernetes Cluster                    │
+│                                                         │
 │   node1 (Control Plane)        node2 (Worker)           │
-│   192.168.122.11               192.168.122.12            │
-│                                                          │
-│   ┌──────────────────┐         ┌──────────────────┐      │
-│   │ Vector (systemd) │         │ Vector (systemd) │      │
-│   │                  │         │                  │      │
-│   │ /var/log/containers        │ /var/log/containers      │
-│   │ journald kubelet │         │ journald kubelet │      │
-│   │ journald containerd        │ journald containerd      │
-│   │ kubectl events   │         │ (không có events)│      │
-│   └────────┬─────────┘         └────────┬─────────┘      │
-└────────────┼──────────────────────────  ┼ ───────────────┘
+│   192.168.122.11               192.168.122.12           │
+│                                                         │
+│   ┌──────────────────┐         ┌──────────────────┐     │
+│   │ Vector (systemd) │         │ Vector (systemd) │     │
+│   │                  │         │                  │     │
+│   │ /var/log/containers        │ /var/log/containers    │
+│   │ journald kubelet │         │ journald kubelet │     │
+│   │ journald containerd        │ journald containerd    │
+│   │ kubectl events   │         │ (không có events)│     │
+│   └────────┬─────────┘         └────────┬─────────┘     │
+└────────────┼──────────────────────────  ┼ ──────────────┘
              │   HTTPS + gzip             │
-             └──────────────┬────────────┘
+             └──────────────┬─────────────┘
                             ▼
               logging-server (192.168.122.25)
               ┌─────────────────────────────┐
