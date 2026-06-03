@@ -1,0 +1,147 @@
+data_dir: /var/lib/vector
+
+api:
+  enabled: true
+  address: "0.0.0.0:8686"
+
+sources:
+  kubernetes_pod_logs:
+    type: file
+    include:
+      - /var/log/containers/*.log
+    read_from: end
+
+  journald_kubelet:
+    type: journald
+    include_units:
+      - kubelet.service
+    current_boot_only: false
+
+  journald_containerd:
+    type: journald
+    include_units:
+      - containerd.service
+    current_boot_only: false
+
+transforms:
+  process_pod_logs:
+    type: remap
+    inputs:
+      - kubernetes_pod_logs
+    source: |
+      cri, _err = parse_regex(string!(.message), r'^(?P<cri_ts>\S+)\s+(?P<stream>stdout|stderr)\s+\S+\s+(?P<log>.+)$')
+      if cri != null {
+        .message = string!(cri.log)
+      }
+      filename = string!(.file)
+      filename = replace(filename, "/var/log/containers/", "")
+      filename = replace(filename, ".log", "")
+      parts = split(filename, "_")
+      .k8s_pod       = get!(parts, [0])
+      .k8s_namespace = get!(parts, [1])
+      container_part = get!(parts, [2])
+      .k8s_container = replace!(container_part, r'-[a-f0-9]{64}$', "")
+      .k8s_node      = "node2"
+
+      ns  = string!(.k8s_namespace)
+      pod = string!(.k8s_pod)
+      .log_source = if ns == "ingress-nginx" {
+        "ingress"
+      } else if ns == "kube-system" && contains(pod, "coredns") {
+        "coredns"
+      } else if ns == "kube-system" && contains(pod, "calico") {
+        "calico"
+      } else if ns == "kube-system" {
+        "k8s-system"
+      } else {
+        "app"
+      }
+
+      parsed, err = parse_json(string!(.message))
+      if err == null {
+        . = merge(., object!(parsed))
+        .is_json_log = true
+        if !exists(.message) { .message = "" }
+      } else {
+        .is_json_log = false
+      }
+
+      if exists(.timestamp) && .timestamp != null {
+        ts, ts_err = parse_timestamp(to_string!(.timestamp), "%+")
+        if ts_err == null { .@timestamp = ts }
+        del(.timestamp)
+      }
+      if !exists(.@timestamp) { .@timestamp = now() }
+
+      raw = downcase(string(.level) ?? string(.Level) ?? string(.severity) ?? "info")
+      .log_level = if includes(["error","err","fatal","critical","crit"], raw) {
+        "ERROR"
+      } else if includes(["warn","warning"], raw) {
+        "WARN"
+      } else {
+        "INFO"
+      }
+      del(.level); del(.Level); del(.severity)
+      del(.file); del(.source_type)
+
+  process_kubelet_logs:
+    type: remap
+    inputs:
+      - journald_kubelet
+    source: |
+      .log_source    = "kubelet"
+      .k8s_node      = string(._HOSTNAME) ?? "unknown"
+      .k8s_namespace = "kube-system"
+      .k8s_pod       = "host/" + string(.k8s_node)
+      .k8s_container = "kubelet"
+      .is_json_log   = false
+      priority = to_int(.PRIORITY) ?? 6
+      .log_level = if priority <= 3 { "ERROR" } else if priority == 4 { "WARN" } else { "INFO" }
+      .@timestamp = now()
+      del(.PRIORITY); del(.SYSTEMD_UNIT); del(.SYSLOG_IDENTIFIER)
+      del(._HOSTNAME); del(._MACHINE_ID); del(._BOOT_ID)
+      del(._TRANSPORT); del(._UID); del(._GID); del(._PID)
+      del(._COMM); del(._EXE); del(._CMDLINE)
+      del(.source_type)
+
+  process_containerd_logs:
+    type: remap
+    inputs:
+      - journald_containerd
+    source: |
+      .log_source    = "containerd"
+      .k8s_node      = string(._HOSTNAME) ?? "unknown"
+      .k8s_namespace = "kube-system"
+      .k8s_pod       = "host/" + string(.k8s_node)
+      .k8s_container = "containerd"
+      .is_json_log   = false
+      priority = to_int(.PRIORITY) ?? 6
+      .log_level = if priority <= 3 { "ERROR" } else if priority == 4 { "WARN" } else { "INFO" }
+      .@timestamp = now()
+      del(.PRIORITY); del(.SYSTEMD_UNIT); del(.SYSLOG_IDENTIFIER)
+      del(._HOSTNAME); del(._MACHINE_ID); del(._BOOT_ID)
+      del(._TRANSPORT); del(._UID); del(._GID); del(._PID)
+      del(._COMM); del(._EXE); del(._CMDLINE)
+      del(.source_type)
+
+sinks:
+  es_k8s_logs:
+    type: elasticsearch
+    inputs:
+      - process_pod_logs
+      - process_kubelet_logs
+      - process_containerd_logs
+    endpoints:
+      - https://192.168.122.25:9200
+    auth:
+      strategy: basic
+      user: elastic
+      password: "111111"
+    tls:
+      ca_file: /etc/vector/certs/http_ca.crt
+    bulk:
+      index: "k8s-logs-%Y.%m.%d"
+      action: create
+    batch:
+      max_events: 100
+      timeout_secs: 5
