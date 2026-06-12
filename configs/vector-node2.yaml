@@ -8,8 +8,9 @@ sources:
   kubernetes_pod_logs:
     type: file
     include:
-      - /var/log/containers/*.log
-    read_from: end
+      - /var/log/pods/*/*/*.log
+    read_from: beginning
+    ignore_checkpoints: false
 
   journald_kubelet:
     type: journald
@@ -29,22 +30,26 @@ transforms:
     inputs:
       - kubernetes_pod_logs
     source: |
-      cri, _err = parse_regex(string!(.message), r'^(?P<cri_ts>\S+)\s+(?P<stream>stdout|stderr)\s+\S+\s+(?P<log>.+)$')
+      cri, _err = parse_regex(string(.message) ?? "", r'^(?P<cri_ts>\S+)\s+(?P<stream>stdout|stderr)\s+\S+\s+(?P<log>.+)$')
       if cri != null {
-        .message = string!(cri.log)
+        .message = string(cri.log) ?? ""
       }
-      filename = string!(.file)
-      filename = replace(filename, "/var/log/containers/", "")
-      filename = replace(filename, ".log", "")
-      parts = split(filename, "_")
-      .k8s_pod       = get!(parts, [0])
-      .k8s_namespace = get!(parts, [1])
-      container_part = get!(parts, [2])
-      .k8s_container = replace!(container_part, r'-[a-f0-9]{64}$', "")
+
+      # Parse /var/log/pods/<namespace>_<pod>_<uid>/<container>/<N>.log
+      filepath = string(.file) ?? ""
+      if filepath == "" { abort }
+      path_parts = split(filepath, "/")
+      pod_segment = string(get!(path_parts, [4])) ?? ""
+      if pod_segment == "" { abort }
+      pod_parts = split(pod_segment, "_")
+      .k8s_namespace = string(get!(pod_parts, [0])) ?? "unknown"
+      pod_parts_len = length(pod_parts)
+      .k8s_pod       = join!(slice!(pod_parts, 1, pod_parts_len - 1), "_")
+      .k8s_container = string(get!(path_parts, [5])) ?? "unknown"
       .k8s_node      = "node2"
 
-      ns  = string!(.k8s_namespace)
-      pod = string!(.k8s_pod)
+      ns  = .k8s_namespace
+      pod = .k8s_pod
       .log_source = if ns == "ingress-nginx" {
         "ingress"
       } else if ns == "kube-system" && contains(pod, "coredns") {
@@ -57,7 +62,7 @@ transforms:
         "app"
       }
 
-      parsed, err = parse_json(string!(.message))
+      parsed, err = parse_json(string(.message) ?? "")
       if err == null {
         . = merge(., object!(parsed))
         .is_json_log = true
@@ -73,7 +78,16 @@ transforms:
       }
       if !exists(.@timestamp) { .@timestamp = now() }
 
-      raw = downcase(string(.level) ?? string(.Level) ?? string(.severity) ?? "info")
+      raw_level = if exists(.level) && .level != null {
+        to_string!(.level)
+      } else if exists(.Level) && .Level != null {
+        to_string!(.Level)
+      } else if exists(.severity) && .severity != null {
+        to_string!(.severity)
+      } else {
+        "info"
+      }
+      raw = downcase(raw_level)
       .log_level = if includes(["error","err","fatal","critical","crit"], raw) {
         "ERROR"
       } else if includes(["warn","warning"], raw) {
@@ -144,4 +158,13 @@ sinks:
       action: create
     batch:
       max_events: 100
-      timeout_secs: 5
+#   rate_limit_capacity: 500
+#   rate_limit_interval_secs: 1
+
+#  debug_out:
+#    type: console
+#    inputs:
+#      - process_pod_logs
+#    encoding:
+#    codec: json
+#
