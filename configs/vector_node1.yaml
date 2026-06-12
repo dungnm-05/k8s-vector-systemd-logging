@@ -90,7 +90,7 @@ transforms:
       }
       if !exists(.@timestamp) { .@timestamp = now() }
 
-      # kiểm tra exists trước để tránh string() fail trên null
+      # BUG-3 fix: kiểm tra exists trước để tránh string() fail trên null
       raw_level = if exists(.level) && .level != null {
         to_string!(.level)
       } else if exists(.Level) && .Level != null {

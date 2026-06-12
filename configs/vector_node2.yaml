@@ -78,6 +78,7 @@ transforms:
       }
       if !exists(.@timestamp) { .@timestamp = now() }
 
+      # BUG-3 fix: kiểm tra exists trước để tránh string() fail trên null
       raw_level = if exists(.level) && .level != null {
         to_string!(.level)
       } else if exists(.Level) && .Level != null {
@@ -158,8 +159,6 @@ sinks:
       action: create
     batch:
       max_events: 100
-#   rate_limit_capacity: 500
-#   rate_limit_interval_secs: 1
 
 #  debug_out:
 #    type: console
