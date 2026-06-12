@@ -8,8 +8,9 @@ sources:
   kubernetes_pod_logs:
     type: file
     include:
-      - /var/log/containers/*.log
+      - /var/log/pods/*/*/*.log
     read_from: end
+    ignore_checkpoints: false
 
   journald_kubelet:
     type: journald
@@ -31,7 +32,7 @@ sources:
     command:
       - bash
       - -c
-      - "kubectl get events --all-namespaces --sort-by=.lastTimestamp -o json | tr -d '\n'"
+      - kubectl get events --all-namespaces --sort-by=.lastTimestamp -o json | python3 -c 'import sys,json; [print(json.dumps(e)) for e in json.load(sys.stdin).get("items",[])]'
 
 transforms:
   process_pod_logs:
@@ -39,22 +40,28 @@ transforms:
     inputs:
       - kubernetes_pod_logs
     source: |
-      cri, _err = parse_regex(string!(.message), r'^(?P<cri_ts>\S+)\s+(?P<stream>stdout|stderr)\s+\S+\s+(?P<log>.+)$')
+      cri, _err = parse_regex(string(.message) ?? "", r'^(?P<cri_ts>\S+)\s+(?P<stream>stdout|stderr)\s+\S+\s+(?P<log>.+)$')
       if cri != null {
-        .message = string!(cri.log)
+        .message = string(cri.log) ?? ""
       }
-      filename = string!(.file)
-      filename = replace(filename, "/var/log/containers/", "")
-      filename = replace(filename, ".log", "")
-      parts = split(filename, "_")
-      .k8s_pod       = get!(parts, [0])
-      .k8s_namespace = get!(parts, [1])
-      container_part = get!(parts, [2])
-      .k8s_container = replace!(container_part, r'-[a-f0-9]{64}$', "")
+
+      # Parse /var/log/pods/<namespace>_<pod>_<uid>/<container>/<N>.log
+      filepath = string(.file) ?? ""
+      if filepath == "" { abort }
+      path_parts = split(filepath, "/")
+      # path_parts[4] = "<namespace>_<pod>_<uid>", path_parts[5] = container, path_parts[6] = "N.log"
+      pod_segment = string(get!(path_parts, [4])) ?? ""
+      if pod_segment == "" { abort }
+      pod_parts = split(pod_segment, "_")
+      .k8s_namespace = string(get!(pod_parts, [0])) ?? "unknown"
+      # pod name is everything between first and last underscore (uid is last segment)
+      pod_parts_len = length(pod_parts)
+      .k8s_pod       = join!(slice!(pod_parts, 1, pod_parts_len - 1), "_")
+      .k8s_container = string(get!(path_parts, [5])) ?? "unknown"
       .k8s_node      = "node1"
 
-      ns  = string!(.k8s_namespace)
-      pod = string!(.k8s_pod)
+      ns  = .k8s_namespace
+      pod = .k8s_pod
       .log_source = if ns == "ingress-nginx" {
         "ingress"
       } else if ns == "kube-system" && contains(pod, "coredns") {
@@ -67,7 +74,7 @@ transforms:
         "app"
       }
 
-      parsed, err = parse_json(string!(.message))
+      parsed, err = parse_json(string(.message) ?? "")
       if err == null {
         . = merge(., object!(parsed))
         .is_json_log = true
@@ -83,7 +90,17 @@ transforms:
       }
       if !exists(.@timestamp) { .@timestamp = now() }
 
-      raw = downcase(string(.level) ?? string(.Level) ?? string(.severity) ?? "info")
+      # kiểm tra exists trước để tránh string() fail trên null
+      raw_level = if exists(.level) && .level != null {
+        to_string!(.level)
+      } else if exists(.Level) && .Level != null {
+        to_string!(.Level)
+      } else if exists(.severity) && .severity != null {
+        to_string!(.severity)
+      } else {
+        "info"
+      }
+      raw = downcase(raw_level)
       .log_level = if includes(["error","err","fatal","critical","crit"], raw) {
         "ERROR"
       } else if includes(["warn","warning"], raw) {
@@ -139,30 +156,27 @@ transforms:
     inputs:
       - kubernetes_events
     source: |
-      parsed, err = parse_json(string!(.message))
-      if err != null || !exists(parsed.items) { abort }
-      items = array!(parsed.items)
-      if length(items) == 0 { abort }
-      ev = object!(items[0])
+      ev, err = parse_json(string!(.message))
+      if err != null { abort }
       .log_source         = "k8s-event"
-      .event_type         = string(get!(ev, ["type"]))         ?? "Normal"
-      .event_reason       = string(get!(ev, ["reason"]))       ?? "Unknown"
-      .event_message      = string(get!(ev, ["message"]))      ?? ""
-      .event_count        = to_int(get!(ev, ["count"]))        ?? 1
-      .event_source       = string(get!(ev, ["source", "component"])) ?? "unknown"
-      .involved_kind      = string(get!(ev, ["involvedObject", "kind"]))      ?? ""
-      .involved_name      = string(get!(ev, ["involvedObject", "name"]))      ?? ""
-      .involved_namespace = string(get!(ev, ["involvedObject", "namespace"])) ?? ""
-      ts_str = string(get!(ev, ["lastTimestamp"])) ?? string(get!(ev, ["eventTime"])) ?? null
+      .event_type         = string(ev.type)              ?? "Normal"
+      .event_reason       = string(ev.reason)            ?? "Unknown"
+      .event_message      = string(ev.message)           ?? ""
+      .event_count        = to_int(ev.count)             ?? 1
+      .event_source       = string(ev.source.component)  ?? "unknown"
+      .involved_kind      = string(ev.involvedObject.kind)      ?? ""
+      .involved_name      = string(ev.involvedObject.name)      ?? ""
+      .involved_namespace = string(ev.involvedObject.namespace) ?? ""
+      .k8s_namespace      = .involved_namespace
+      ts_str = string(ev.lastTimestamp) ?? string(ev.eventTime) ?? null
       if ts_str != null {
-        ts, err = parse_timestamp(string!(ts_str), "%+")
-        .@timestamp = if err == null { ts } else { now() }
+        ts, ts_err = parse_timestamp(string!(ts_str), "%+")
+        .@timestamp = if ts_err == null { ts } else { now() }
       } else {
         .@timestamp = now()
       }
-      .log_level     = if .event_type == "Warning" { "WARN" } else { "INFO" }
-      .message       = .event_reason + ": " + .event_message
-      .k8s_namespace = .involved_namespace
+      .log_level = if .event_type == "Warning" { "WARN" } else { "INFO" }
+      .message   = .event_reason + ": " + .event_message
       del(.source_type)
 
 sinks:
