@@ -427,16 +427,22 @@ involved_namespace : "demo-logging"
 
 ```
 
----
+## Phần 6 — Cấu hình Cảnh báo qua Telegram
 
-## Cấu trúc repository
+Hệ thống sử dụng cơ chế cảnh báo miễn phí bằng cách chạy script tự động (Cronjob) định kỳ để quét dữ liệu trên Elasticsearch và đẩy thông báo về nhóm Telegram.
 
-```
-k8s-logging-stack/
-├── README.md
-├── configs/
-│   ├── vector-node1.yaml    # Vector config cho control-plane (có K8s Events)
-│   └── vector-node2.yaml    # Vector config cho worker (không có K8s Events)
-└── scripts/
-    └── setup-elasticsearch.sh  # Tạo Index Templates + ILM Policies
-```
+### 6.1 Thiết lập Telegram Bot
+1. Chát với `@BotFather` trên Telegram để tạo một Bot mới và lấy **Token ID**.
+2. Tạo một Group Telegram, thêm Bot vào nhóm và lấy **Group ID** (Chat ID).
+
+> **Thông tin kết nối mẫu:**
+> - **Group ID:** `-5246393269`
+> - **Token ID:** `8962874008:AAEzDeKULbeKcHjnZBy-MASLLaSQ9qinbJE`
+
+### 6.2 Cài đặt Script Cảnh báo trên logging-server
+Tạo thư mục lưu trữ và phân quyền thực thi cho script:
+```bash
+mkdir -p /etc/kibana/notifications
+cd /etc/kibana/notifications
+touch check_logs.sh && chmod +x check_logs.sh
+nano check_logs.sh
