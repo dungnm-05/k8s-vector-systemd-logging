@@ -24,7 +24,7 @@ Hướng dẫn xây dựng hệ thống logging cho Kubernetes cluster với **V
 │   │ kubectl events   │         │ (không có events)│     │
 │   └────────┬─────────┘         └────────┬─────────┘     │
 └────────────┼──────────────────────────  ┼ ──────────────┘
-             │   HTTPS + gzip             │
+             │            HTTPS           │
              └──────────────┬─────────────┘
                             ▼
               logging-server (192.168.122.25)
