@@ -424,9 +424,6 @@ involved_namespace : "demo-logging"
 
 ---
 
-
-```
-
 ## Phần 6 — Cấu hình Cảnh báo qua Telegram
 
 Hệ thống sử dụng cơ chế cảnh báo miễn phí bằng cách chạy script tự động (Cronjob) định kỳ để quét dữ liệu trên Elasticsearch và đẩy thông báo về nhóm Telegram.
@@ -435,7 +432,7 @@ Hệ thống sử dụng cơ chế cảnh báo miễn phí bằng cách chạy s
 1. Chát với `@BotFather` trên Telegram để tạo một Bot mới và lấy **Token ID**.
 2. Tạo một Group Telegram, thêm Bot vào nhóm và lấy **Group ID** (Chat ID).
 
-> **Thông tin kết nối mẫu:**
+> **Thông tin kết nối:**
 > - **Group ID:** `-5246393269`
 > - **Token ID:** `8962874008:AAEzDeKULbeKcHjnZBy-MASLLaSQ9qinbJE`
 
@@ -446,3 +443,18 @@ mkdir -p /etc/kibana/notifications
 cd /etc/kibana/notifications
 touch check_logs.sh && chmod +x check_logs.sh
 nano check_logs.sh
+```
+
+### 6.3 Cấu hình tự động chạy định kỳ (Cronjob)
+
+Mở trình quản lý tiến trình định kỳ `crontab`:
+
+```bash
+crontab -e
+```
+
+Thêm dòng sau vào cuối file để hệ thống tự động kiểm tra log mỗi 5 phút một lần:
+
+```bash
+*/5 * * * * /etc/kibana/notifications/check_logs.sh >> /var/log/check_logs.log 2>&1
+```
