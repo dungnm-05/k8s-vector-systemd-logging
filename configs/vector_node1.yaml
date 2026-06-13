@@ -159,6 +159,7 @@ transforms:
       ev, err = parse_json(string!(.message))
       if err != null { abort }
       .log_source         = "k8s-event"
+      .event_uid          = string(ev.metadata.uid)          ?? ""
       .event_type         = string(ev.type)              ?? "Normal"
       .event_reason       = string(ev.reason)            ?? "Unknown"
       .event_message      = string(ev.message)           ?? ""
@@ -178,6 +179,14 @@ transforms:
       .log_level = if .event_type == "Warning" { "WARN" } else { "INFO" }
       .message   = .event_reason + ": " + .event_message
       del(.source_type)
+  dedup_events:
+    type: dedupe
+    inputs:
+      - process_events   
+    fields:
+      match:
+        - event_uid
+        - event_count
 
 sinks:
   es_k8s_logs:
@@ -204,7 +213,7 @@ sinks:
   es_k8s_events:
     type: elasticsearch
     inputs:
-      - process_events
+      - dedup_events
     endpoints:
       - https://192.168.122.25:9200
     auth:
